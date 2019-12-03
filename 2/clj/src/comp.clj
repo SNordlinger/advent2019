@@ -1,4 +1,4 @@
-(ns comp (:require [clojure.math.combinatorics :as combo]))
+(ns comp)
 
 (defn get-program []
   (->>
@@ -33,10 +33,11 @@
    first))
 
 (defn find-noun-verb []
-  (first (filter (fn [[noun verb]] (= (get-input-result noun verb)
-                                      19690720))
-                 (combo/cartesian-product (range 0 100) (range 0 100)))))
+  (let [pairs (for [noun (range 0 100) verb (range 0 100)] [noun verb])]
+    (first (filter (fn [[noun verb]] (= (get-input-result noun verb)
+                                        19690720))
+                   pairs))))
 
 (defn -main []
   (println (str "Part 1: " (get-input-result 12 2)))
-  (println (str "Part 2: " (vec (find-noun-verb)))))
+  (println (str "Part 2: " (find-noun-verb))))
