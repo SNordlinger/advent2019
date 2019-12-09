@@ -14,8 +14,8 @@
 
 (defn get-pixel [pixel-val]
   (if (= pixel-val 1)
-    "\u001b[47m "
-    "\u001b[40m "))
+    "\u001b[47m \u001b[0m"
+    "\u001b[40m \u001b[0m"))
 
 (defn get-pixel-row [row-vals]
   (apply str (map get-pixel row-vals)))
@@ -40,4 +40,4 @@
 (defn -main []
   (println (str "Part 1:" (part-one)))
   (println "Part 2:")
-  (println (str (part-two) "\u001b[0m")))
+  (println (part-two)))
