@@ -1,4 +1,5 @@
-(ns comp (:require [clojure.math.combinatorics :as combo]))
+(ns comp (:require [clojure.math.combinatorics :as combo]
+                   [clojure.core.async :as async :refer [<! >! to-chan chan go alts!! timeout close!]]))
 
 (defn get-program []
   (->>
@@ -21,9 +22,9 @@
   (let [[val-1 val-2] (apply-param-mode program param-mode [in-1 in-2])]
     (assoc program out-addr (op val-1 val-2))))
 
-(defn add-output [program args param-mode output]
+(defn get-output [program args param-mode]
   (let [[val] (apply-param-mode program param-mode args)]
-    (conj output val)))
+    val))
 
 (defn jump-on-cond [program start cond args param-mode]
   (let [[val-1 addr] (apply-param-mode program param-mode args)]
@@ -32,57 +33,47 @@
       (+ start 3))))
 
 (defn run
-  ([initial-program]
-   (run initial-program []))
-  ([initial-program initial-input]
-   (loop [program initial-program start 0 input initial-input output []]
-     (if (= (get program start) 99)
-       output
-       (let [[first-val & args] (subvec program start)
-             opcode (mod first-val 100)
-             param-mode (quot first-val 100)]
-         (case opcode
-           1 (recur (apply-op program + args param-mode)
-                    (+ start 4)
-                    input
-                    output)
-           2 (recur (apply-op program * args param-mode)
-                    (+ start 4)
-                    input
-                    output)
-           3 (recur (assoc program (first args) (first input))
-                    (+ start 2)
-                    (rest input)
-                    output)
-           4 (recur program
-                    (+ start 2)
-                    input
-                    (add-output program args param-mode output))
-           5 (recur program
-                    (jump-on-cond program start (partial not= 0) args param-mode)
-                    input
-                    output)
-           6 (recur program
-                    (jump-on-cond program start (partial = 0) args param-mode)
-                    input
-                    output)
-           7 (recur (apply-op program (fn [val-1 val-2] (if (< val-1 val-2) 1 0)) args param-mode)
-                    (+ start 4)
-                    input
-                    output)
-           8 (recur (apply-op program (fn [val-1 val-2] (if (= val-1 val-2) 1 0)) args param-mode)
-                    (+ start 4)
-                    input
-                    output)
-           (throw (Exception. (str "Bad Opcode: " opcode)))))))))
+  [initial-program in-chan out-chan]
+  (go
+    (loop [program initial-program start 0]
+      (if (= (get program start) 99)
+        (close! out-chan)
+        (let [[first-val & args] (subvec program start)
+              opcode (mod first-val 100)
+              param-mode (quot first-val 100)]
+          (case opcode
+            1 (recur (apply-op program + args param-mode)
+                     (+ start 4))
+            2 (recur (apply-op program * args param-mode)
+                     (+ start 4))
+            3 (recur (assoc program (first args) (<! in-chan))
+                     (+ start 2))
+            4 (do (>! out-chan (get-output program args param-mode))
+                  (recur program
+                         (+ start 2)))
+            5 (recur program
+                     (jump-on-cond program start (partial not= 0) args param-mode))
+            6 (recur program
+                     (jump-on-cond program start (partial = 0) args param-mode))
+            7 (recur (apply-op program (fn [val-1 val-2] (if (< val-1 val-2) 1 0)) args param-mode)
+                     (+ start 4))
+            8 (recur (apply-op program (fn [val-1 val-2] (if (= val-1 val-2) 1 0)) args param-mode)
+                     (+ start 4))
+            (throw (Exception. (str "Bad Opcode: " opcode)))))))))
 
-(defn run-program [input]
+(defn run-sync [program input]
+  (let [in-chan (to-chan input) out-chan (chan)]
+    (run program in-chan out-chan)
+    (first (alts!! [(async/into [] out-chan)
+                    (timeout 10000)]))))
+
+(defn run-program [in-chan out-chan]
   (->
    (get-program)
-   (run input)))
+   (run in-chan out-chan)))
 
 (defn apply-amp [program phase input]
-  (first (run program [phase input])))
+  (first (run-sync program [phase input])))
 
 (defn amplify-signal [program phase-settings]
   ((apply comp (map (fn [phase] (partial apply-amp program phase))
@@ -95,7 +86,3 @@
 
 (defn part-one []
   (get-max-signal (get-program)))
-
-(defn -main []
-  (println (str "Part 1: " (run-program 1)))
-  (println (str "Part 2: " (run-program 5))))
