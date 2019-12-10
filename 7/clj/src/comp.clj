@@ -1,5 +1,5 @@
 (ns comp (:require [clojure.math.combinatorics :as combo]
-                   [clojure.core.async :as async :refer [<! >! to-chan chan go alts!! timeout close!]]))
+                   [clojure.core.async :as async :refer [<! >! go]]))
 
 (defn get-program []
   (->>
@@ -35,9 +35,8 @@
 (defn run
   [initial-program in-chan out-chan]
   (go
-    (loop [program initial-program start 0]
-      (if (= (get program start) 99)
-        (close! out-chan)
+    (try
+      (loop [program initial-program start 0]
         (let [[first-val & args] (subvec program start)
               opcode (mod first-val 100)
               param-mode (quot first-val 100)]
@@ -59,30 +58,47 @@
                      (+ start 4))
             8 (recur (apply-op program (fn [val-1 val-2] (if (= val-1 val-2) 1 0)) args param-mode)
                      (+ start 4))
-            (throw (Exception. (str "Bad Opcode: " opcode)))))))))
+            99 nil
+            (throw (Exception. (str "Bad Opcode: " opcode))))))
+      (finally (async/close! out-chan)))))
 
 (defn run-sync [program input]
-  (let [in-chan (to-chan input) out-chan (chan)]
+  (let [in-chan (async/to-chan input) out-chan (async/chan)]
     (run program in-chan out-chan)
-    (first (alts!! [(async/into [] out-chan)
-                    (timeout 10000)]))))
+    (first (async/alts!! [(async/into [] out-chan)
+                          (async/timeout 10000)]))))
 
 (defn run-program [in-chan out-chan]
   (->
    (get-program)
    (run in-chan out-chan)))
 
-(defn apply-amp [program phase input]
-  (first (run-sync program [phase input])))
+(defn make-input-chan [phase]
+  (let [ch (async/chan)]
+    (async/put! ch phase)
+    ch))
 
 (defn amplify-signal [program phase-settings]
-  ((apply comp (map (fn [phase] (partial apply-amp program phase))
-                    (reverse phase-settings)))
-   0))
+  (let [out-chans (repeatedly (count phase-settings) async/chan)
+        multi-chan (async/mult (last out-chans))
+        in-chans (cons (async/chan 10) (drop-last out-chans))
+        final-chan (async/chan)]
+    (async/tap multi-chan (first in-chans))
+    (async/tap multi-chan final-chan)
+    (dorun (map (fn [in-chan out-chan] (run program in-chan out-chan))
+                in-chans
+                out-chans))
+    (dorun (map async/put! in-chans phase-settings))
+    (async/put! (first in-chans) 0)
+    (last (first (async/alts!! [(async/into [] final-chan)
+                                (async/timeout 10000)])))))
 
-(defn get-max-signal [program]
+(defn get-max-signal [program possible-phases]
   (apply max (map (partial amplify-signal program)
-                  (combo/permutations [0 1 2 3 4]))))
+                  (combo/permutations possible-phases))))
 
 (defn part-one []
-  (get-max-signal (get-program)))
+  (get-max-signal (get-program) [0 1 2 3 4]))
+
+(defn part-two []
+  (get-max-signal (get-program) [5 6 7 8 9]))
